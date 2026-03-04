@@ -383,6 +383,7 @@ class NormalLoss(nn.Module):
         else:
             raise ValueError(f"Unsupported loss type: {self.normal_loss_type}")
 
+
 class AdaptiveDepth(nn.Module):
     """Adaptive loss"""
 

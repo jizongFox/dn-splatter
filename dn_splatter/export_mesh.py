@@ -108,7 +108,11 @@ class GSMeshExporter:
 
     def cropbox(self) -> Optional[OrientedBox]:
         """Returns the cropbox for the mesh."""
-        if self.cropbox_pos is None and self.cropbox_rpy is None and self.cropbox_scale is None:
+        if (
+            self.cropbox_pos is None
+            and self.cropbox_rpy is None
+            and self.cropbox_scale is None
+        ):
             return None
 
         if self.cropbox_pos is None:
@@ -747,7 +751,9 @@ class MarchingCubesMesh(GSMeshExporter):
             if crop_box is not None:
                 mask = crop_box.within(grid_coords)
             else:
-                mask = torch.ones(grid_coords.shape[0], dtype=torch.bool, device=grid_coords.device)
+                mask = torch.ones(
+                    grid_coords.shape[0], dtype=torch.bool, device=grid_coords.device
+                )
 
             # Only query densities for points inside cropbox
             samples = grid_coords[mask].to(model.device)
@@ -766,11 +772,15 @@ class MarchingCubesMesh(GSMeshExporter):
                     densities_inside.append(batch_densities)
                 densities_inside = torch.cat(densities_inside, dim=0)
                 densities_flat[mask] = densities_inside
-                densities = densities_flat.reshape(self.resolution, self.resolution, self.resolution)
+                densities = densities_flat.reshape(
+                    self.resolution, self.resolution, self.resolution
+                )
 
             # Optionally, mask out-of-cropbox voxels to a low value so marching cubes ignores them
             if crop_box is not None:
-                densities[~mask.reshape(self.resolution, self.resolution, self.resolution)] = -1e6
+                densities[
+                    ~mask.reshape(self.resolution, self.resolution, self.resolution)
+                ] = -1e6
 
             CONSOLE.print(
                 f"Computing mesh for surface level {self.isosurface_threshold}"
@@ -867,10 +877,7 @@ class TSDFFusion(GSMeshExporter):
                 if "mask" in data:
                     mask = data["mask"]
                 camera = cameras[image_idx : image_idx + 1]
-                outputs = model.get_outputs_for_camera(
-                    camera=camera,
-                    obb_box=crop_box
-                )
+                outputs = model.get_outputs_for_camera(camera=camera, obb_box=crop_box)
                 assert "depth" in outputs
                 depth_map = outputs["depth"]
                 c2w = torch.eye(4, dtype=torch.float, device=depth_map.device)
