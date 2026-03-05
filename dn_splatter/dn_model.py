@@ -268,122 +268,122 @@ class DNSplatterModel(SplatfactoModel):
     def normals(self):
         return self.gauss_params["normals"]
 
+    @torch.no_grad()
     def refinement_after(self, optimizers: Optimizers, step):
         assert step == self.step
         if self.step <= self.config.warmup_length:
             return
-        with torch.no_grad():
-            # Offset all the opacity reset logic by refine_every so that we don't
-            # save checkpoints right when the opacity is reset (saves every 2k)
-            # then cull
-            # only split/cull if we've seen every image since opacity reset
-            reset_interval = self.config.reset_alpha_every * self.config.refine_every
-            do_densification = (
-                self.step < self.config.stop_split_at
-                and self.step % reset_interval
-                > self.num_train_data + self.config.refine_every
+        # Offset all the opacity reset logic by refine_every so that we don't
+        # save checkpoints right when the opacity is reset (saves every 2k)
+        # then cull
+        # only split/cull if we've seen every image since opacity reset
+        reset_interval = self.config.reset_alpha_every * self.config.refine_every
+        do_densification = (
+            self.step < self.config.stop_split_at
+            and self.step % reset_interval
+            > self.num_train_data + self.config.refine_every
+        )
+        if do_densification:
+            # then we densify
+            assert (
+                self.xys_grad_norm is not None
+                and self.vis_counts is not None
+                and self.max_2Dsize is not None
             )
-            if do_densification:
-                # then we densify
-                assert (
-                    self.xys_grad_norm is not None
-                    and self.vis_counts is not None
-                    and self.max_2Dsize is not None
-                )
-                avg_grad_norm = (
-                    (self.xys_grad_norm / self.vis_counts)
-                    * 0.5
-                    * max(self.last_size[0], self.last_size[1])
-                )
-                high_grads = (avg_grad_norm > self.config.densify_grad_thresh).squeeze()
-                splits = (
-                    self.scales.exp().max(dim=-1).values
-                    > self.config.densify_size_thresh
+            avg_grad_norm = (
+                (self.xys_grad_norm / self.vis_counts)
+                * 0.5
+                * max(self.last_size[0], self.last_size[1])
+            )
+            high_grads = (avg_grad_norm > self.config.densify_grad_thresh).squeeze()
+            splits = (
+                self.scales.exp().max(dim=-1).values
+                > self.config.densify_size_thresh
+            ).squeeze()
+            if self.step < self.config.stop_screen_size_at:
+                splits |= (
+                    self.max_2Dsize > self.config.split_screen_size
                 ).squeeze()
-                if self.step < self.config.stop_screen_size_at:
-                    splits |= (
-                        self.max_2Dsize > self.config.split_screen_size
-                    ).squeeze()
-                splits &= high_grads
-                nsamps = self.config.n_split_samples
-                split_params = self.split_gaussians(splits, nsamps)
+            splits &= high_grads
+            nsamps = self.config.n_split_samples
+            split_params = self.split_gaussians(splits, nsamps)
 
-                dups = (
-                    self.scales.exp().max(dim=-1).values
-                    <= self.config.densify_size_thresh
-                ).squeeze()
-                dups &= high_grads
-                dup_params = self.dup_gaussians(dups)
-                for name, param in self.gauss_params.items():
-                    self.gauss_params[name] = torch.nn.Parameter(
-                        torch.cat(
-                            [param.detach(), split_params[name], dup_params[name]],
-                            dim=0,
-                        )
-                    )
-                # append zeros to the max_2Dsize tensor
-                self.max_2Dsize = torch.cat(
-                    [
-                        self.max_2Dsize,
-                        torch.zeros_like(split_params["scales"][:, 0]),
-                        torch.zeros_like(dup_params["scales"][:, 0]),
-                    ],
-                    dim=0,
-                )
-
-                split_idcs = torch.where(splits)[0]
-                self.dup_in_all_optim(optimizers, split_idcs, nsamps)
-
-                dup_idcs = torch.where(dups)[0]
-                self.dup_in_all_optim(optimizers, dup_idcs, 1)
-
-                # After a guassian is split into two new gaussians, the original one should also be pruned.
-                splits_mask = torch.cat(
-                    (
-                        splits,
-                        torch.zeros(
-                            nsamps * splits.sum() + dups.sum(),
-                            device=self.device,
-                            dtype=torch.bool,
-                        ),
+            dups = (
+                self.scales.exp().max(dim=-1).values
+                <= self.config.densify_size_thresh
+            ).squeeze()
+            dups &= high_grads
+            dup_params = self.dup_gaussians(dups)
+            for name, param in self.gauss_params.items():
+                self.gauss_params[name] = torch.nn.Parameter(
+                    torch.cat(
+                        [param.detach(), split_params[name], dup_params[name]],
+                        dim=0,
                     )
                 )
+            # append zeros to the max_2Dsize tensor
+            self.max_2Dsize = torch.cat(
+                [
+                    self.max_2Dsize,
+                    torch.zeros_like(split_params["scales"][:, 0]),
+                    torch.zeros_like(dup_params["scales"][:, 0]),
+                ],
+                dim=0,
+            )
 
-                deleted_mask = self.cull_gaussians(splits_mask)
-            elif (
-                self.step >= self.config.stop_split_at
-                and self.config.continue_cull_post_densification
-            ):
-                deleted_mask = self.cull_gaussians()
-            else:
-                # if we donot allow culling post refinement, no more gaussians will be pruned.
-                deleted_mask = None
+            split_idcs = torch.where(splits)[0]
+            self.dup_in_all_optim(optimizers, split_idcs, nsamps)
 
-            if deleted_mask is not None:
-                self.remove_from_all_optim(optimizers, deleted_mask)
+            dup_idcs = torch.where(dups)[0]
+            self.dup_in_all_optim(optimizers, dup_idcs, 1)
 
-            if (
-                self.step < self.config.stop_split_at
-                and self.step % reset_interval == self.config.refine_every
-            ):
-                # Reset value is set to be twice of the cull_alpha_thresh
-                reset_value = self.config.cull_alpha_thresh * 2.0
-                self.opacities.data = torch.clamp(
-                    self.opacities.data,
-                    max=torch.logit(
-                        torch.tensor(reset_value, device=self.device)
-                    ).item(),
+            # After a guassian is split into two new gaussians, the original one should also be pruned.
+            splits_mask = torch.cat(
+                (
+                    splits,
+                    torch.zeros(
+                        nsamps * splits.sum() + dups.sum(),
+                        device=self.device,
+                        dtype=torch.bool,
+                    ),
                 )
-                # reset the exp of optimizer
-                optim = optimizers.optimizers["opacities"]
-                param = optim.param_groups[0]["params"][0]
-                param_state = optim.state[param]
-                param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
-                param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
+            )
 
-            self.xys_grad_norm = None
-            self.vis_counts = None
-            self.max_2Dsize = None
+            deleted_mask = self.cull_gaussians(splits_mask)
+        elif (
+            self.step >= self.config.stop_split_at
+            and self.config.continue_cull_post_densification
+        ):
+            deleted_mask = self.cull_gaussians()
+        else:
+            # if we donot allow culling post refinement, no more gaussians will be pruned.
+            deleted_mask = None
+
+        if deleted_mask is not None:
+            self.remove_from_all_optim(optimizers, deleted_mask)
+
+        if (
+            self.step < self.config.stop_split_at
+            and self.step % reset_interval == self.config.refine_every
+        ):
+            # Reset value is set to be twice of the cull_alpha_thresh
+            reset_value = self.config.cull_alpha_thresh * 2.0
+            self.opacities.data = torch.clamp(
+                self.opacities.data,
+                max=torch.logit(
+                    torch.tensor(reset_value, device=self.device)
+                ).item(),
+            )
+            # reset the exp of optimizer
+            optim = optimizers.optimizers["opacities"]
+            param = optim.param_groups[0]["params"][0]
+            param_state = optim.state[param]
+            param_state["exp_avg"] = torch.zeros_like(param_state["exp_avg"])
+            param_state["exp_avg_sq"] = torch.zeros_like(param_state["exp_avg_sq"])
+
+        self.xys_grad_norm = None
+        self.vis_counts = None
+        self.max_2Dsize = None
 
     def get_gaussian_param_groups(self) -> Dict[str, List[Parameter]]:
         # Here we explicitly use the means, scales as parameters so that the user can override this function and
