@@ -15,6 +15,7 @@ from torchmetrics.image import (
 )
 
 from nerfstudio.field_components.field_heads import FieldHeadNames
+from jaxtyping import Float
 
 
 class DepthLossType(Enum):
@@ -358,6 +359,7 @@ class NormalLossType(Enum):
     L1 = "L1"
     Smooth = "Smooth"
     AdaptiveNormal = "AdaptiveNormal"
+    Angular = "Angular"
 
 
 class NormalLoss(nn.Module):
@@ -380,6 +382,8 @@ class NormalLoss(nn.Module):
             return TVLoss(**self.kwargs)
         elif self.normal_loss_type == NormalLossType.AdaptiveNormal:
             return AdaptiveNormal(**self.kwargs)
+        elif self.normal_loss_type == NormalLossType.Angular:
+            return AngularNormal(**self.kwargs)
         else:
             raise ValueError(f"Unsupported loss type: {self.normal_loss_type}")
 
@@ -423,6 +427,38 @@ class AdaptiveNormal(nn.Module):
             normal_confidence = 1 - (normal_diff > 0.1).float()
             normal_confidence = (normal_confidence > 0).squeeze(0)
             return self.L1(pred[normal_confidence, :], gt[normal_confidence, :])
+
+
+class AngularNormal(nn.Module):
+    def __init__(
+        self, implementation: Literal["scalar", "per-pixel"] = "scalar", **kwargs
+    ):
+        super().__init__()
+        self.implementation = implementation
+
+    def forward(
+        self, pred: Float[Tensor, "h w 3"], gt: Float[Tensor, "h w 3"], step: int
+    ):
+        _ = step
+        assert pred.shape == gt.shape and pred.shape[-1] == 3, (
+            f"Expected pred/gt with same shape and last dim=3, got {pred.shape} and {gt.shape}."
+        )
+
+        if pred.min() >= 0 and pred.max() <= 1:
+            pred = pred * 2 - 1
+        if gt.min() >= 0 and gt.max() <= 1:
+            gt = gt * 2 - 1
+
+        pred = F.normalize(pred, p=2, dim=-1, eps=1e-6)
+        gt = F.normalize(gt, p=2, dim=-1, eps=1e-6)
+
+        cos_sim = torch.sum(pred * gt, dim=-1)
+        cos_sim = torch.clamp(cos_sim, min=-1.0 + 1e-6, max=1.0 - 1e-6)
+        angular_error_deg = torch.rad2deg(torch.acos(cos_sim))
+
+        if self.implementation == "scalar":
+            return angular_error_deg.mean()
+        return angular_error_deg.unsqueeze(-1)
 
 
 # pearson depth loss, adapted from https://github.com/ForMyCat/SparseGS/blob/95e7aef29c5562400d3b2b38cc7e90436a432b7c/utils/loss_utils.py#L80

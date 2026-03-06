@@ -1,0 +1,31 @@
+#!/bin/bash
+ns-train dn-splatter --experiment-name basic/enable_depth_normal_test \
+  --vis tensorboard \
+  --pipeline.model.use-depth-loss True \
+  --pipeline.model.depth-lambda 0.2 \
+  --pipeline.model.use-normal-loss True \
+  --pipeline.model.use-normal-tv-loss True \
+  --pipeline.model.normal-supervision mono \
+   mushroom \
+  --data /home/jizong/workspace/dConstruct/dn-splatter/datasets/room_datasets/coffee_room
+
+#ns-train dn-splatter --experiment-name basic/enable_normal \
+#  --vis tensorboard \
+#  --pipeline.model.use-depth-loss False \
+#  --pipeline.model.depth-lambda 0.2 \
+#  --pipeline.model.use-normal-loss True \
+#  --pipeline.model.use-normal-tv-loss True \
+#  --pipeline.model.normal-supervision mono \
+#   mushroom \
+#  --data /home/jizong/workspace/dConstruct/dn-splatter/datasets/room_datasets/coffee_room
+#
+#
+#ns-train dn-splatter --experiment-name basic/baseline \
+#  --vis tensorboard \
+#  --pipeline.model.use-depth-loss False \
+#  --pipeline.model.depth-lambda 0.2 \
+#  --pipeline.model.use-normal-loss False \
+#  --pipeline.model.use-normal-tv-loss True \
+#  --pipeline.model.normal-supervision mono \
+#   mushroom \
+#  --data /home/jizong/workspace/dConstruct/dn-splatter/datasets/room_datasets/coffee_room

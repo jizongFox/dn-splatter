@@ -761,9 +761,13 @@ class DNSplatterModel(SplatfactoModel):
         else:
             raise ValueError("Regularization strategy not supported")
 
-        main_loss = rgb_loss + regularization_strategy_loss
+        main_loss = rgb_loss
 
-        return {"main_loss": main_loss, "scale_reg": scale_reg}
+        return {
+            "main_loss": main_loss,
+            "scale_reg": scale_reg,
+            "reg_loss": regularization_strategy_loss,
+        }
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
         """Compute and returns metrics.
