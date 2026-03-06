@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 
 from dn_splatter.losses import DepthLoss, DepthLossType, NormalLoss, NormalLossType
 
@@ -27,7 +28,6 @@ def mean_angular_error(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
 
 
 def dilate_edge(edge, dilation_size=1):
-
     kernel_size = 2 * dilation_size + 1
     dilation_kernel = torch.ones((1, 1, kernel_size, kernel_size)).cuda()
 
@@ -50,9 +50,7 @@ def find_edges(im, threshold=0.01, dilation_itr=1):
             ),  # Add batch dimension, shape: (1, 1, h, w)
             laplacian_kernel,
             padding=1,
-        ).squeeze(
-            0
-        )  # shape: (1, h, w)
+        ).squeeze(0)  # shape: (1, h, w)
 
         edges = (laplacian > threshold) * 1.0
         structure_el = laplacian_kernel * 0.0 + 1.0
@@ -71,9 +69,7 @@ def find_edges(im, threshold=0.01, dilation_itr=1):
                 (1.0 / (im[i : i + 1] + 1e-6)).unsqueeze(0),  # Shape: (1, 1, h, w)
                 laplacian_kernel,
                 padding=1,
-            ).squeeze(
-                0
-            )  # Shape: (1, h, w)
+            ).squeeze(0)  # Shape: (1, h, w)
             laplacian.append(channel_laplacian)
         laplacian = torch.cat(laplacian, dim=0)  # Shape: (3, h, w)
         edges = (laplacian > threshold) * 1.0
@@ -86,9 +82,7 @@ def find_edges(im, threshold=0.01, dilation_itr=1):
                     edges[j : j + 1].unsqueeze(0),  # Shape: (1, 1, h, w)
                     structure_el,
                     padding=1,
-                ).squeeze(
-                    0
-                )  # Shape: (1, h, w)
+                ).squeeze(0)  # Shape: (1, h, w)
                 dilated_edges.append(channel_dilated)
             dilated_edges = torch.cat(dilated_edges, dim=0)  # Shape: (3, h, w)
 
@@ -110,10 +104,10 @@ class RegularizationStrategy(nn.Module):
         return self.device_indicator_param.device
 
     @abstractmethod
-    def get_loss(self, **kwargs):
+    def get_loss(self, **kwargs) -> dict[str, Tensor]:
         """Loss"""
 
-    def forward(self, **kwargs):
+    def forward(self, **kwargs) -> dict[str, Tensor]:
         """"""
         return self.get_loss(**kwargs)
 
@@ -131,6 +125,7 @@ class DNRegularization(RegularizationStrategy):
         depth_lambda: float = 0.2,
         normal_loss_type: Optional[NormalLossType] = NormalLossType.L1,
         normal_lambda: float = 0.1,
+        smooth_lambda: float = 1e-3,
     ):
         super().__init__()
         self.depth_tolerance = depth_tolerance
@@ -138,27 +133,45 @@ class DNRegularization(RegularizationStrategy):
         self.depth_loss = DepthLoss(self.depth_loss_type)
         self.depth_lambda = depth_lambda
 
-        self.normal_loss_type: NormalLossType =normal_loss_type
+        self.normal_loss_type: NormalLossType = normal_loss_type
         self.normal_loss = NormalLoss(self.normal_loss_type)
         self.normal_smooth_loss_type: NormalLossType = NormalLossType.Smooth
         self.normal_smooth_loss = NormalLoss(self.normal_smooth_loss_type)
         self.normal_lambda = normal_lambda
+        self.smooth_lambda = smooth_lambda
 
     def get_loss(
         self, pred_depth, gt_depth, pred_normal, surface_normal, gt_normal, **kwargs
-    ):
+    ) -> dict[str, Tensor]:
         """Regularization loss"""
 
-        depth_loss, normal_loss = 0.0, 0.0
+        depth_loss, pred_normal_loss, surface_normal_loss, smooth_loss = (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
 
         if self.depth_loss is not None:
             depth_loss = self.get_depth_loss(pred_depth, gt_depth, **kwargs)
         if self.normal_loss is not None:
-            normal_loss = self.get_normal_loss(pred_normal, gt_normal, name="pred_norm",**kwargs)
-            normal_loss += self.get_normal_loss(surface_normal, gt_normal,name="surf_norm", **kwargs)
+            pred_normal_loss = self.get_normal_loss(
+                pred_normal, gt_normal, name="pred_norm", **kwargs
+            )
+            surface_normal_loss = self.get_normal_loss(
+                surface_normal, gt_normal, name="surf_norm", **kwargs
+            )
+        smooth_loss = self.normal_smooth_loss(pred_normal) * self.smooth_lambda
+        smooth_loss += self.normal_smooth_loss(surface_normal) * self.smooth_lambda
         scales = kwargs["scales"]
         scale_loss = self.get_scale_loss(scales=scales)
-        return depth_loss + normal_loss + scale_loss
+        return {
+            "depth_loss": depth_loss,
+            "pred_normal_loss": pred_normal_loss,
+            "surface_normal_loss": surface_normal_loss,
+            "scale_loss": scale_loss,
+            "smooth_loss": smooth_loss,
+        }
 
     def get_depth_loss(self, pred_depth, gt_depth, **kwargs):
         """Depth loss"""
@@ -190,7 +203,7 @@ class DNRegularization(RegularizationStrategy):
 
         return depth_loss
 
-    def get_normal_loss(self, pred_normal, gt_normal, name:str="",**kwargs):
+    def get_normal_loss(self, pred_normal, gt_normal, name: str = "", **kwargs):
         """Normal loss and normal smoothing
         pred_normal: predicted normal, shape height, width, 3, between 0-1
         gt_normal: ground truth normal, shape height, width, 3, between 0-1
@@ -203,8 +216,7 @@ class DNRegularization(RegularizationStrategy):
         # plt.imshow(gt_normal.cpu().detach().numpy())
         # plt.savefig(f"normal_comparison_{name}.png")
         # plt.close(plt.gcf())
-        normal_loss = self.normal_loss(pred_normal, gt_normal)
-        normal_loss += self.normal_smooth_loss(pred_normal)
+        normal_loss = self.normal_loss(pred_normal, gt_normal) * self.normal_lambda
 
         return normal_loss
 

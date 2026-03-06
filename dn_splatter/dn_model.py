@@ -127,6 +127,9 @@ class DNSplatterModelConfig(SplatfactoModelConfig):
     # pearson depth loss lambda
     pearson_lambda: float = 0
     """Regularizer for pearson depth loss"""
+    #
+    densify_grad_thresh: float =  0.005
+    # split_screen_size: float = 0.5
 
 
 class DNSplatterModel(SplatfactoModel):
@@ -257,6 +260,7 @@ class DNSplatterModel(SplatfactoModel):
                 depth_lambda=self.config.depth_lambda,
                 normal_loss_type=self.config.normal_loss_type,
                 normal_lambda=self.config.normal_lambda,
+                smooth_lambda=self.config.smooth_loss_lambda,
             )
         elif self.config.regularization_strategy == "ags-mesh":
             self.regularization_strategy = AGSMeshRegularization()
@@ -267,7 +271,7 @@ class DNSplatterModel(SplatfactoModel):
             # self.regularization_strategy.depth_loss_type = self.config.depth_loss_type
             # self.regularization_strategy.depth_loss = self.depth_loss
             # self.regularization_strategy.depth_lambda = self.config.depth_lambda
-        # else:
+            # else:
             self.regularization_strategy.depth_loss_type = None
             self.regularization_strategy.depth_loss = None
 
@@ -761,7 +765,7 @@ class DNSplatterModel(SplatfactoModel):
         return {
             "main_loss": main_loss,
             "scale_reg": scale_reg,
-            "reg_loss": regularization_strategy_loss,
+            **regularization_strategy_loss,
         }
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
@@ -882,7 +886,9 @@ class DNSplatterModel(SplatfactoModel):
             predicted_depth  # a placeholder if no sensor depth is available
         )
         combined_normal = predicted_normal  # a placeholder if no gt normal is available
-        combined_surface_normal = surface_normal  # a placeholder if no gt surface normal is available
+        combined_surface_normal = (
+            surface_normal  # a placeholder if no gt surface normal is available
+        )
 
         # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
         gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
@@ -978,7 +984,6 @@ class DNSplatterModel(SplatfactoModel):
             }
             metrics_dict.update(surface_normal_metrics)
             combined_surface_normal = torch.cat([gt_normal, surface_normal], dim=1)
-
 
         images_dict = {
             "img": combined_rgb,
