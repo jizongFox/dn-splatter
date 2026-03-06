@@ -1,11 +1,13 @@
 #!/bin/bash
-ns-train dn-splatter --experiment-name basic/enable_depth_normal_test \
+ns-train dn-splatter --experiment-name basic/enable_normal_angular \
   --vis tensorboard \
-  --pipeline.model.use-depth-loss True \
+  --pipeline.model.use-depth-loss False \
   --pipeline.model.depth-lambda 0.2 \
   --pipeline.model.use-normal-loss True \
   --pipeline.model.use-normal-tv-loss True \
   --pipeline.model.normal-supervision mono \
+  --pipeline.model.normal-lambda 0.01 \
+  --pipeline.model.normal-loss-type Angular \
    mushroom \
   --data /home/jizong/workspace/dConstruct/dn-splatter/datasets/room_datasets/coffee_room
 
