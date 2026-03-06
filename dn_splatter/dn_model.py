@@ -607,7 +607,7 @@ class DNSplatterModel(SplatfactoModel):
         #     torch.tensor([1, -1, -1, 1], device=c2w.device, dtype=c2w.dtype)
         # )
         surface_normal = normal_from_depth_image(
-            depths=depth_im.detach(),
+            depths=depth_im,
             fx=self.camera.fx.item(),
             fy=self.camera.fy.item(),
             cx=self.camera.cx.item(),
