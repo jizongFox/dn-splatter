@@ -437,7 +437,7 @@ class AngularNormal(nn.Module):
         self.implementation = implementation
 
     def forward(
-        self, pred: Float[Tensor, "h w 3"], gt: Float[Tensor, "h w 3"], step: int
+        self, pred: Float[Tensor, "h w 3"], gt: Float[Tensor, "h w 3"], step: int=0
     ):
         _ = step
         assert pred.shape == gt.shape and pred.shape[-1] == 3, (

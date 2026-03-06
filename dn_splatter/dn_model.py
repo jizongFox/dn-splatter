@@ -15,7 +15,7 @@ from torch.nn import Parameter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
-from dn_splatter.losses import DepthLoss, DepthLossType, TVLoss
+from dn_splatter.losses import DepthLoss, DepthLossType, TVLoss, NormalLossType
 from dn_splatter.metrics import DepthMetrics, NormalMetrics, RGBMetrics
 from dn_splatter.regularization_strategy import (
     DNRegularization,
@@ -81,6 +81,8 @@ class DNSplatterModelConfig(SplatfactoModelConfig):
     """Whether to extract and render normals or skip this"""
     use_normal_loss: bool = True
     """Enables normal loss('s)"""
+    normal_loss_type: NormalLossType = NormalLossType.L1
+    """Choose which normal loss to train with Literal["L1", "Cosine", "TV", "AdaptiveNormal", "Angular"]"""
     use_normal_cosine_loss: bool = False
     """Cosine similarity loss"""
     use_normal_tv_loss: bool = True
@@ -171,10 +173,10 @@ class DNSplatterModel(SplatfactoModel):
 
         self.mse_loss = torch.nn.MSELoss()
 
-        # Depth Losses
-        if self.config.use_depth_loss:
-            self.depth_loss = DepthLoss(self.config.depth_loss_type)
-            assert self.config.depth_lambda > 0, "depth_lambda should be > 0"
+        # # Depth Losses
+        # if self.config.use_depth_loss:
+        #     self.depth_loss = DepthLoss(self.config.depth_loss_type)
+        #     assert self.config.depth_lambda > 0, "depth_lambda should be > 0"
 
         if self.config.use_depth_smooth_loss:
             if self.config.smooth_loss_type == DepthLossType.EdgeAwareTV:
@@ -195,9 +197,7 @@ class DNSplatterModel(SplatfactoModel):
 
         # init normals if present
         with torch.no_grad():
-            if (
-                self.seed_points is not None and len(self.seed_points) == 3
-            ):  # type: ignore
+            if self.seed_points is not None and len(self.seed_points) == 3:  # type: ignore
                 CONSOLE.print(
                     "[bold yellow]Initialising Gaussian normals from intial seed points"
                 )
@@ -252,17 +252,22 @@ class DNSplatterModel(SplatfactoModel):
         )
 
         if self.config.regularization_strategy == "dn-splatter":
-            self.regularization_strategy = DNRegularization()
+            self.regularization_strategy = DNRegularization(
+                depth_loss_type=self.config.depth_loss_type,
+                depth_lambda=self.config.depth_lambda,
+                normal_loss_type=self.config.normal_loss_type,
+                normal_lambda=self.config.normal_lambda,
+            )
         elif self.config.regularization_strategy == "ags-mesh":
             self.regularization_strategy = AGSMeshRegularization()
         else:
             raise NotImplementedError
 
-        if self.config.use_depth_loss:
-            self.regularization_strategy.depth_loss_type = self.config.depth_loss_type
-            self.regularization_strategy.depth_loss = self.depth_loss
-            self.regularization_strategy.depth_lambda = self.config.depth_lambda
-        else:
+        if not self.config.use_depth_loss:
+            # self.regularization_strategy.depth_loss_type = self.config.depth_loss_type
+            # self.regularization_strategy.depth_loss = self.depth_loss
+            # self.regularization_strategy.depth_lambda = self.config.depth_lambda
+        # else:
             self.regularization_strategy.depth_loss_type = None
             self.regularization_strategy.depth_loss = None
 
@@ -302,20 +307,16 @@ class DNSplatterModel(SplatfactoModel):
             )
             high_grads = (avg_grad_norm > self.config.densify_grad_thresh).squeeze()
             splits = (
-                self.scales.exp().max(dim=-1).values
-                > self.config.densify_size_thresh
+                self.scales.exp().max(dim=-1).values > self.config.densify_size_thresh
             ).squeeze()
             if self.step < self.config.stop_screen_size_at:
-                splits |= (
-                    self.max_2Dsize > self.config.split_screen_size
-                ).squeeze()
+                splits |= (self.max_2Dsize > self.config.split_screen_size).squeeze()
             splits &= high_grads
             nsamps = self.config.n_split_samples
             split_params = self.split_gaussians(splits, nsamps)
 
             dups = (
-                self.scales.exp().max(dim=-1).values
-                <= self.config.densify_size_thresh
+                self.scales.exp().max(dim=-1).values <= self.config.densify_size_thresh
             ).squeeze()
             dups &= high_grads
             dup_params = self.dup_gaussians(dups)
@@ -375,9 +376,7 @@ class DNSplatterModel(SplatfactoModel):
             reset_value = self.config.cull_alpha_thresh * 2.0
             self.opacities.data = torch.clamp(
                 self.opacities.data,
-                max=torch.logit(
-                    torch.tensor(reset_value, device=self.device)
-                ).item(),
+                max=torch.logit(torch.tensor(reset_value, device=self.device)).item(),
             )
             # reset the exp of optimizer
             optim = optimizers.optimizers["opacities"]
@@ -579,8 +578,6 @@ class DNSplatterModel(SplatfactoModel):
             )
             self.gauss_params["normals"] = normals_world
 
-
-
             # xys = self.xys[0, ...].detach()
             xys = self.xys[0, ...]
 
@@ -639,9 +636,7 @@ class DNSplatterModel(SplatfactoModel):
             from pathlib import Path
             from dn_splatter.utils.utils import plot_model_outputs
 
-            plot_model_outputs(
-                outputs, save_path=Path("output.png")
-            )
+            plot_model_outputs(outputs, save_path=Path("output.png"))
 
         return outputs
 
@@ -876,12 +871,18 @@ class DNSplatterModel(SplatfactoModel):
             if outputs["normal"].dim() == 4
             else outputs["normal"]
         )
+        surface_normal = (
+            outputs["surface_normal"][0, ...]
+            if outputs["surface_normal"].dim() == 4
+            else outputs["surface_normal"]
+        )
 
         combined_rgb = torch.cat([gt_rgb, predicted_rgb], dim=1)
         combined_depth = (
             predicted_depth  # a placeholder if no sensor depth is available
         )
         combined_normal = predicted_normal  # a placeholder if no gt normal is available
+        combined_surface_normal = surface_normal  # a placeholder if no gt surface normal is available
 
         # Switch images from [H, W, C] to [1, C, H, W] for metrics computations
         gt_rgb = torch.moveaxis(gt_rgb, -1, 0)[None, ...]
@@ -958,10 +959,32 @@ class DNSplatterModel(SplatfactoModel):
             metrics_dict.update(normal_metrics)
             combined_normal = torch.cat([gt_normal, predicted_normal], dim=1)
 
+            if gt_normal.shape != surface_normal.shape:
+                surface_normal = TF.resize(
+                    surface_normal.permute(2, 0, 1),
+                    gt_normal.shape[:2],
+                    antialias=None,
+                ).permute(1, 2, 0)
+
+            (mae, rmse, mean_err, med_err) = self.normal_metrics(
+                surface_normal.permute(2, 0, 1).unsqueeze(0),
+                gt_normal.permute(2, 0, 1).unsqueeze(0),
+            )
+            surface_normal_metrics = {
+                "normal_surface_mae": float(mae.item()),
+                "normal_surface_rsme": float(rmse.item()),
+                "normal_surface_mean_err": float(mean_err.item()),
+                "normal_surface_med_err": float(med_err.item()),
+            }
+            metrics_dict.update(surface_normal_metrics)
+            combined_surface_normal = torch.cat([gt_normal, surface_normal], dim=1)
+
+
         images_dict = {
             "img": combined_rgb,
             "depth": combined_depth,
             "normal": combined_normal,
+            "surface_normal": combined_surface_normal,
         }
 
         return metrics_dict, images_dict

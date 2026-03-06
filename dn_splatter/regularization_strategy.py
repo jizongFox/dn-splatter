@@ -129,6 +129,7 @@ class DNRegularization(RegularizationStrategy):
         depth_tolerance: float = 0.1,
         depth_loss_type: Optional[DepthLossType] = DepthLossType.EdgeAwareLogL1,
         depth_lambda: float = 0.2,
+        normal_loss_type: Optional[NormalLossType] = NormalLossType.L1,
         normal_lambda: float = 0.1,
     ):
         super().__init__()
@@ -137,7 +138,7 @@ class DNRegularization(RegularizationStrategy):
         self.depth_loss = DepthLoss(self.depth_loss_type)
         self.depth_lambda = depth_lambda
 
-        self.normal_loss_type: NormalLossType = NormalLossType.L1
+        self.normal_loss_type: NormalLossType =normal_loss_type
         self.normal_loss = NormalLoss(self.normal_loss_type)
         self.normal_smooth_loss_type: NormalLossType = NormalLossType.Smooth
         self.normal_smooth_loss = NormalLoss(self.normal_smooth_loss_type)
