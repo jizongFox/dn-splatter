@@ -215,30 +215,43 @@ class GDataset(InputDataset):
             normal_format: which format "omnidata" or "dsine" the normal data is stored in. We convert automatically to omnidata format.
             c2w: optional c2w transform if normals should be in world frame
         """
-        if path.suffix == ".png":
+        suffix = path.suffix.lower()
+        if suffix in {".png", ".jpeg", ".jpg"}:
             normal_map = np.array(Image.open(path), dtype="uint8")[..., :3]
-        else:
+        elif suffix == ".npy":
             # TODO: check if this is correct for .npy data
-            normal_map = np.load(path)
+            normal_map = np.load(path, allow_pickle=True)
             normal_map = normal_map.transpose(1, 2, 0)
             if normal_map.min() < 0:
                 normal_map = (normal_map + 1) / 2
+        else:
+            raise ValueError(f"Unsupported normal map file extension: {path.suffix}")
 
         normal_map = torch.from_numpy(normal_map.astype("float32") / 255.0).float()
+        assert normal_map.ndim == 3 and normal_map.shape[-1] == 3, (
+            f"Expected normal_map to have shape [H, W, 3], got {tuple(normal_map.shape)}"
+        )
+        assert torch.all((normal_map >= 0.0) & (normal_map <= 1.0)), (
+            f"Expected normal_map values in [0, 1], got min={normal_map.min().item()} "
+            f"max={normal_map.max().item()}"
+        )
 
         if normal_format == "omnidata" and normal_frame == "camera_frame":
             # convert normal map from opengl to opencv
             h, w, _ = normal_map.shape
             normal_map = normal_map.view(-1, 3)
             normal_map = 2 * normal_map - 1
-            normal_map = normal_map @ torch.diag(
-                torch.tensor([1, -1, -1], device=normal_map.device, dtype=torch.float)
-            )
+            # normal_map = normal_map @ torch.diag(
+            #     torch.tensor([1, -1, -1], device=normal_map.device, dtype=torch.float)
+            # )
             normal_map = normal_map.view(h, w, 3)
             if normal_map.min() < 0:
                 normal_map = (normal_map + 1) / 2
 
         if normal_frame == "world_frame":
+            raise ValueError(
+                "World frame normals are not supported yet. Please use camera frame normals."
+            )
             # convert normals to world coordinates
             # Used for SDFStudio models
             # import os

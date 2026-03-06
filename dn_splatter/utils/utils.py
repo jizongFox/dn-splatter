@@ -3,7 +3,7 @@
 import os
 import random
 from pathlib import Path
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -27,12 +27,185 @@ from nerfstudio.process_data.process_data_utils import (
 from nerfstudio.utils import colormaps
 from nerfstudio.utils.rich_utils import CONSOLE
 
+from gsplat.cuda_legacy._torch_impl import quat_to_rotmat
+from jaxtyping import Float
+import typing as t
+
+
 # Depth Scale Factor m to mm
 SCALE_FACTOR = 0.001
 
 
+def _squeeze_output_batch(tensor: Optional[Tensor]) -> Optional[Tensor]:
+    """Remove optional leading singleton batch dimension from model outputs.
+
+    DNSplatter outputs are usually [H, W, C], but some callers may pass
+    [1, H, W, C].
+    """
+    if tensor is None:
+        return None
+    if tensor.dim() == 4 and tensor.shape[0] == 1:
+        tensor = tensor[0]
+    return tensor
+
+
+def _normalize_normal_map(normal: Tensor) -> Tensor:
+    """Normalize normal tensors into displayable RGB in [0, 1]."""
+    normal = _squeeze_output_batch(normal)
+    assert normal is not None
+
+    if normal.dim() == 2:
+        normal = normal[:, :, None]
+
+    if normal.shape[-1] == 1:
+        normal = normal.repeat(1, 1, 3)
+
+    if normal.dim() != 3 or normal.shape[-1] != 3:
+        raise ValueError(f"Expected normal map with 3 channels, got {normal.shape}")
+
+    # normals from model are already in [0, 1], but geometry normals can
+    # sometimes arrive in [-1, 1], so map both safely.
+    normal = torch.nan_to_num(normal)
+    if normal.min() < 0.0:
+        normal = (normal + 1.0) / 2.0
+    normal = normal.clamp(0.0, 1.0)
+    return normal
+
+
+def _normalize_accumulation(accumulation: Tensor) -> Tensor:
+    """Normalize accumulation/alpha map into displayable grayscale RGB."""
+    accumulation = _squeeze_output_batch(accumulation)
+    assert accumulation is not None
+
+    if accumulation.dim() == 3 and accumulation.shape[-1] == 1:
+        accumulation = accumulation[..., 0]
+    elif accumulation.dim() != 2:
+        raise ValueError(
+            f"Expected accumulation map to be [H, W] or [H, W, 1], got {accumulation.shape}"
+        )
+
+    accumulation = torch.nan_to_num(accumulation)
+    accumulation = accumulation.clamp_min(0.0)
+
+    accum_min = accumulation.min()
+    accum_max = accumulation.max()
+    if (accum_max - accum_min) > 1e-6:
+        accumulation = (accumulation - accum_min) / (accum_max - accum_min)
+    else:
+        accumulation = torch.zeros_like(accumulation)
+
+    accumulation = accumulation.clamp(0.0, 1.0)
+    return accumulation[:, :, None].expand(-1, -1, 3)
+
+
+def _depth_color_map(depth: Tensor) -> Tensor:
+    """Convert raw depth map [H, W, 1] into a colorized view."""
+    depth = _squeeze_output_batch(depth)
+    assert depth is not None
+
+    if depth.dim() == 2:
+        depth = depth[..., None]
+    elif depth.dim() == 3 and depth.shape[-1] == 1:
+        pass
+    else:
+        raise ValueError(
+            f"Expected depth map shape [H,W] or [H,W,1], got {depth.shape}"
+        )
+
+    depth = torch.nan_to_num(depth)
+    depth_min = depth.min()
+    depth_max = depth.max()
+    if (depth_max - depth_min) > 1e-6:
+        depth = (depth - depth_min) / (depth_max - depth_min)
+    else:
+        depth = torch.zeros_like(depth)
+    return colormaps.apply_depth_colormap(depth)
+
+
+def build_model_output_visuals(outputs: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    """Convert model outputs into display-ready tensors.
+
+    Returns a dictionary with consistent [H, W, C] tensors for quick plotting
+    and saving. Keys follow output names.
+    """
+    visuals: Dict[str, Tensor] = {}
+
+    rgb = _squeeze_output_batch(outputs["rgb"])
+    if rgb is None:
+        raise ValueError("Output 'rgb' missing")
+    if rgb.dim() == 2:
+        rgb = rgb[:, :, None].expand(-1, -1, 3)
+    visuals["rgb"] = torch.clamp(rgb, 0.0, 1.0)
+
+    if "depth" in outputs and outputs["depth"] is not None:
+        visuals["depth"] = _squeeze_output_batch(outputs["depth"])
+        visuals["depth_color"] = _depth_color_map(outputs["depth"])
+
+    if "normal" in outputs and outputs["normal"] is not None:
+        visuals["normal"] = _normalize_normal_map(outputs["normal"])
+
+    if "surface_normal" in outputs and outputs["surface_normal"] is not None:
+        visuals["surface_normal"] = _normalize_normal_map(outputs["surface_normal"])
+
+    if "accumulation" in outputs and outputs["accumulation"] is not None:
+        visuals["accumulation"] = _normalize_accumulation(outputs["accumulation"])
+
+    if "background" in outputs and outputs["background"] is not None:
+        background = outputs["background"]
+        if not torch.is_tensor(background):
+            background = torch.tensor(background, device=rgb.device)
+        background = torch.clamp(background, 0.0, 1.0)
+        h, w = visuals["rgb"].shape[:2]
+        visuals["background"] = background[None, None, :].expand(h, w, 3)
+
+    return visuals
+
+
+def plot_model_outputs(outputs: Dict[str, Tensor], save_path: Optional[Path] = None):
+    """Render RGB/depth/normal visualizations from model outputs.
+
+    Args:
+        outputs: model outputs dictionary containing at least rgb/depth.
+        save_path: optional path to write the figure PNG.
+
+    Returns:
+        matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    visuals = build_model_output_visuals(outputs)
+    order: Tuple[str, ...] = (
+        "rgb",
+        "depth_color",
+        "normal",
+        "surface_normal",
+        "accumulation",
+        "background",
+    )
+
+    rows = []
+    for key in order:
+        if key in visuals:
+            rows.append((key, visuals[key]))
+
+    ncols = len(rows)
+    fig, axes = plt.subplots(1, ncols, figsize=(ncols * 4.5, 4.5))
+    if ncols == 1:
+        axes = [axes]
+
+    for axis, (name, img) in zip(axes, rows):
+        axis.imshow(img.detach().cpu().numpy())
+        axis.set_title(name)
+        axis.axis("off")
+
+    fig.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, bbox_inches="tight")
+    return fig
+
+
 def video_to_frames(
-    video_path: Path, image_dir: Path("./data/frames"), force: bool = False
+    video_path: Path, image_dir: Path = Path("./data/frames"), force: bool = False
 ):
     """Extract frames from video, requires nerfstudio install"""
     is_empty = False
@@ -76,7 +249,7 @@ def get_filename_list(image_dir: Path, ends_with: Optional[str] = None) -> List:
 
 
 def image_path_to_tensor(
-    image_path: Path, size: Optional[tuple] = None, black_and_white=False
+    image_path: Path, size: Optional[Tuple[int, int]] = None, black_and_white=False
 ) -> Tensor:
     """Convert image from path to tensor
 
@@ -89,6 +262,8 @@ def image_path_to_tensor(
     transform = transforms.ToTensor()
     img_tensor = transform(img).permute(1, 2, 0)[..., :3]
     if size:
+        if not isinstance(size, list):
+            size = list(size)
         img_tensor = resize(
             img_tensor.permute(2, 0, 1), size=size, antialias=None
         ).permute(1, 2, 0)
@@ -634,3 +809,80 @@ def save_outputs_helper(
             os.getcwd() + f"/{render_output_path}/gt/normal/{image_name}.png",
             verbose=False,
         )
+
+
+@torch.compile(mode="reduce-overhead")
+def _gaussian_frame_normals_from_tensors(
+    quats: Float[Tensor, "n 4"],
+    scaling: Float[Tensor, "n 3"],
+    w2c: Float[Tensor, "4 4"],
+) -> Float[Tensor, "n 3"]:
+    """Compute per-Gaussian normals in camera coordinates using tensors only.
+
+    The normal is taken as the minor-axis direction of the gaussian in its local frame,
+    transformed into camera space by `w2c` rotation, and normalized.
+    """
+    rs = quat_to_rotmat(
+        quats
+        # quats=quats,
+        # scales=torch.ones(quats.shape[0], 3, device=quats.device),
+    )
+    onehot = torch.nn.functional.one_hot(scaling.argmin(dim=-1), 3).float()
+
+    # Rotate gaussian local axes into camera space
+    rs_c3 = torch.einsum("ij,bjk->bik", w2c[:3, :3], rs)
+    normals = torch.einsum("bij,bj->bi", rs_c3, onehot)
+
+    # Normalize and sanitize
+    normals = normals / torch.norm(normals, dim=-1, keepdim=True) + 1e-5
+    normals = torch.nan_to_num(normals, nan=0.0, posinf=0.0, neginf=0.0)
+    return normals
+
+
+# @torch.compile(mode="reduce-overhead")
+def _align_normals_orientation(
+    normals: Float[Tensor, "n 3"],
+    xyz: Float[Tensor, "n 3"],
+    w2c: Float[Tensor, "4 4"],
+) -> t.Tuple[Float[Tensor, "n 3"], Float[Tensor, "n 3"]]:
+    """Orient normals to face the camera (tensor-only path).
+
+    This function takes per-point normals expressed in the CAMERA frame and
+    flips them where necessary so they face towards the camera center. The
+    decision is based on the sign of the dot product between the normal and
+    the point position in camera coordinates.
+
+    Frames and inputs:
+    - normals (Bx3): unit (or near-unit) normals in CAMERA coordinates.
+      Typically produced by `_gaussian_frame_normals_from_tensors(...)`.
+    - xyz (Bx3): point means in WORLD coordinates (e.g., Gaussian centers).
+    - w2c (4x4): world-to-camera transform. Only the upper-left 3x3 rotation
+      and the translation ([:3,3]) are used to obtain camera-space positions.
+
+    Computation:
+    - means_cam = R @ xyz + t
+    - cos = dot(normals, means_cam)
+    - normals are multiplied by sign(cos) so that the resulting dot product
+      is non-negative, i.e., the oriented normal faces the camera.
+
+    Returns:
+    - flipped_normals (Bx3): `normals * sign(cos)`, still in CAMERA frame.
+    - means_cam (Bx3): point positions in CAMERA coordinates.
+
+    Conventions:
+    - Adopts the StableNormals visualization convention for mapping to RGB:
+      x-left (R), y-up (G), z-backward (B). This is opposite to the common
+      OpenCV camera convention where +Z points forward.
+
+    Notes:
+    - The `sign` operation is piecewise-constant and non-differentiable at 0;
+      gradients through `sign` are zero almost everywhere. This function is
+      intended for rendering/visualization and orientation disambiguation.
+    - Inputs and outputs are expected to reside on the same device and dtype
+      as the provided tensors. No host<->device transfers are performed.
+    - Verified 1st Jun 2025.
+    """
+    means_cam = torch.einsum("ij,bj->bi", w2c[:3, :3], xyz) + w2c[None, :3, 3]
+    cos = torch.einsum("bk,bk->b", normals, means_cam)
+    multiplicative = torch.sign(cos)
+    return normals * multiplicative[..., None], means_cam

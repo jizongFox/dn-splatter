@@ -143,14 +143,18 @@ class DNRegularization(RegularizationStrategy):
         self.normal_smooth_loss = NormalLoss(self.normal_smooth_loss_type)
         self.normal_lambda = normal_lambda
 
-    def get_loss(self, pred_depth, gt_depth, pred_normal, gt_normal, **kwargs):
+    def get_loss(
+        self, pred_depth, gt_depth, pred_normal, surface_normal, gt_normal, **kwargs
+    ):
         """Regularization loss"""
 
         depth_loss, normal_loss = 0.0, 0.0
+
         if self.depth_loss is not None:
             depth_loss = self.get_depth_loss(pred_depth, gt_depth, **kwargs)
         if self.normal_loss is not None:
-            normal_loss = self.get_normal_loss(pred_normal, gt_normal, **kwargs)
+            normal_loss = self.get_normal_loss(pred_normal, gt_normal, name="pred_norm",**kwargs)
+            normal_loss += self.get_normal_loss(surface_normal, gt_normal,name="surf_norm", **kwargs)
         scales = kwargs["scales"]
         scale_loss = self.get_scale_loss(scales=scales)
         return depth_loss + normal_loss + scale_loss
@@ -185,8 +189,19 @@ class DNRegularization(RegularizationStrategy):
 
         return depth_loss
 
-    def get_normal_loss(self, pred_normal, gt_normal, **kwargs):
-        """Normal loss and normal smoothing"""
+    def get_normal_loss(self, pred_normal, gt_normal, name:str="",**kwargs):
+        """Normal loss and normal smoothing
+        pred_normal: predicted normal, shape height, width, 3, between 0-1
+        gt_normal: ground truth normal, shape height, width, 3, between 0-1
+        """
+        # import matplotlib.pyplot as plt
+        # plt.figure(figsize=(12, 5))
+        # plt.subplot(1, 2, 1)
+        # plt.imshow(pred_normal.cpu().detach().numpy())
+        # plt.subplot(1, 2, 2)
+        # plt.imshow(gt_normal.cpu().detach().numpy())
+        # plt.savefig(f"normal_comparison_{name}.png")
+        # plt.close(plt.gcf())
         normal_loss = self.normal_loss(pred_normal, gt_normal)
         normal_loss += self.normal_smooth_loss(pred_normal)
 

@@ -83,10 +83,14 @@ class ColmapToAlignedMonoDepths:
 
         if not self.skip_colmap_to_depths:
             CONSOLE.print("Generating sfm depth maps from sparse colmap reconstruction")
+            if self.sparse_path.absolute():
+                recon_dir = self.sparse_path
+            else:
+                recon_dir = self.data / self.sparse_path
             colmap_sfm_points_to_depths(
-                recon_dir=self.data / self.sparse_path,
+                recon_dir=recon_dir,
                 output_dir=sfm_depth_path,
-                include_depth_debug=True,
+                include_depth_debug=False,
                 input_images_dir=self.data / self.img_dir_name,
             )
 

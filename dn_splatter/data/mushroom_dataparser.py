@@ -58,7 +58,7 @@ class MushroomDataParserConfig(DataParserConfig):
 
     _target: Type = field(default_factory=lambda: MushroomDataParser)
     """target class to instantiate"""
-
+    meta_json:Path |None=None
     # Mushroom configs
     mode: Literal["iphone", "kinect"] = "iphone"
     """load either the iphone or kinect mushroom data."""
@@ -74,7 +74,7 @@ class MushroomDataParserConfig(DataParserConfig):
     """Whether to use faro scanner depth files in dataparser"""
     use_faro_scanner_pd: bool = False
     """Whether to use faro scanner point data in dataparser"""
-    depth_mode: Literal["sensor", "all", "mono"] = "sensor"
+    depth_mode: Literal["sensor", "all", "mono", "disparity"] = "mono"
     """Which depth data to load"""
     mono_pretrain: Literal["zoe"] = "zoe"
     """Which mono depth pretrain model to use."""
@@ -632,7 +632,7 @@ class MushroomDataParser(DataParser):
                     )
                 }
             )
-        if self.config.depth_mode == "all" or self.config.depth_mode == "sensor":
+        elif self.config.depth_mode == "all" or self.config.depth_mode == "sensor":
             metadata.update(
                 {
                     "sensor_depth_filenames": (
@@ -640,6 +640,18 @@ class MushroomDataParser(DataParser):
                     ),
                 }
             )
+        elif self.config.depth_mode == "disparity":
+            disparity_folder = self.depth_save_dir = long_data_dir / Path("disparity")
+            disparity_filenames = list(disparity_folder.glob("*.npy"))
+            metadata.update(
+                {
+                    "disparity_filenames": disparity_filenames
+                    if len(disparity_filenames) > 0
+                    else None
+                }
+            )
+        else:
+            raise ValueError(f"Unknown depth mode {self.config.depth_mode}")
 
         # process normals
         if self.config.normals_from == "depth":
@@ -770,7 +782,7 @@ class MushroomDataParser(DataParser):
 
     def get_normal_filepaths(self):
         """Helper to load normal paths"""
-        return natsorted(glob.glob(f"{self.normal_save_dir}/*.png"))
+        return natsorted(glob.glob(f"{self.normal_save_dir}/*.jpeg"))
 
     def get_depth_filepaths(self):
         """Helper to load depth paths"""

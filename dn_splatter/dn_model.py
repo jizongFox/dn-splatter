@@ -20,11 +20,15 @@ from dn_splatter.metrics import DepthMetrics, NormalMetrics, RGBMetrics
 from dn_splatter.regularization_strategy import (
     DNRegularization,
 )
-from dn_splatter.regularization_strategy import AGSMeshRegularization, DNRegularization
+from dn_splatter.regularization_strategy import AGSMeshRegularization
 
 from dn_splatter.utils.camera_utils import get_colored_points_from_depth, project_pix
 from dn_splatter.utils.knn import knn_sk
 from dn_splatter.utils.normal_utils import normal_from_depth_image
+from dn_splatter.utils.utils import (
+    _gaussian_frame_normals_from_tensors,
+    _align_normals_orientation,
+)
 
 try:
     from gsplat.rendering import rasterization
@@ -153,9 +157,10 @@ class DNSplatterModel(SplatfactoModel):
             features_dc = torch.nn.Parameter(torch.rand(num_points, 3))
             features_rest = torch.nn.Parameter(torch.zeros((num_points, dim_sh - 1, 3)))
 
-        opacities = torch.nn.Parameter(torch.logit(0.1 * torch.ones(num_points, 1)))
+        opacities = torch.nn.Parameter(torch.logit(0.9 * torch.ones(num_points, 1)))
 
         self.step = 0
+        self._normals_ply_num_exports = 0
         self.crop_box: Optional[OrientedBox] = None
         if self.config.background_color == "random":
             self.background_color = torch.tensor(
@@ -482,19 +487,21 @@ class DNSplatterModel(SplatfactoModel):
         if self.config.rasterize_mode not in ["antialiased", "classic"]:
             raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
 
-        render_mode = "RGB+ED"
+        render_mode: Literal["RGB+ED", "RGB"] = "RGB+ED"
 
         if self.config.sh_degree > 0:
             sh_degree_to_use = min(
                 self.step // self.config.sh_degree_interval, self.config.sh_degree
             )
+        elif self.config.sh_degree == 0:
+            sh_degree_to_use = 0
         else:
             colors_crop = torch.sigmoid(colors_crop)
             sh_degree_to_use = None
 
         render, alpha, info = rasterization(
             means=means_crop,
-            quats=quats_crop / quats_crop.norm(dim=-1, keepdim=True),
+            quats=quats_crop / (quats_crop.norm(dim=-1, keepdim=True) + 1e-8),
             scales=torch.exp(scales_crop),
             opacities=torch.sigmoid(opacities_crop).squeeze(-1),
             colors=colors_crop,
@@ -505,7 +512,7 @@ class DNSplatterModel(SplatfactoModel):
             tile_size=BLOCK_WIDTH,
             packed=False,
             near_plane=0.01,
-            far_plane=1e10,
+            far_plane=1e3,
             render_mode=render_mode,
             sh_degree=sh_degree_to_use,
             sparse_grad=False,
@@ -514,6 +521,7 @@ class DNSplatterModel(SplatfactoModel):
             # set some threshold to disregrad small gaussians for faster rendering.
             # radius_clip=3.0,
         )
+
         if self.training and info["means2d"].requires_grad:
             info["means2d"].retain_grad()
         self.xys = info["means2d"]  # [1, N, 2]
@@ -541,25 +549,40 @@ class DNSplatterModel(SplatfactoModel):
         normals_im = torch.full(rgb.shape, 0.0)
         if self.config.predict_normals:
             quats_crop = quats_crop / quats_crop.norm(dim=-1, keepdim=True)
-            normals = F.one_hot(
-                torch.argmin(scales_crop, dim=-1), num_classes=3
-            ).float()
-            rots = quat_to_rotmat(quats_crop)
-            normals = torch.bmm(rots, normals[:, :, None]).squeeze(-1)
-            normals = F.normalize(normals, dim=1)
-            viewdirs = (
-                -means_crop.detach() + camera.camera_to_worlds.detach()[..., :3, 3]
+            # these normal and surface normal computation only matches dc processing line with its normal convention.
+            c2w = torch.eye(4, device=self.device, dtype=torch.float32)
+            c2w[:3,] = optimized_camera_to_world.squeeze(0)
+            c2w = c2w @ torch.diag(
+                torch.tensor([1, -1, -1, 1], device=c2w.device, dtype=c2w.dtype)
             )
-            viewdirs = viewdirs / viewdirs.norm(dim=-1, keepdim=True)
-            dots = (normals * viewdirs).sum(-1)
-            negative_dot_indices = dots < 0
-            normals[negative_dot_indices] = -normals[negative_dot_indices]
-            # update parameter group normals
-            self.gauss_params["normals"] = normals
-            # convert normals from world space to camera space
-            normals = normals @ camera.camera_to_worlds.squeeze(0)[:3, :3]
+            w2c = c2w.inverse()
+            normals = _gaussian_frame_normals_from_tensors(
+                quats_crop,
+                scaling=scales_crop.exp(),
+                w2c=w2c,
+            )  # normals in opencv convention
+            means_crop_camera_opencv = torch.einsum(
+                "ij,nj->ni",
+                w2c,
+                torch.cat([means_crop, torch.ones_like(means_crop[..., :1])], dim=-1),
+            )[:, :3]
+            normals, _ = _align_normals_orientation(
+                normals,
+                means_crop_camera_opencv,
+                w2c=torch.eye(4, device=normals.device, dtype=normals.dtype),
+            )
+            # convert normals to world space.
+            normals_world = torch.einsum(
+                "ij,nj->ni",
+                c2w[:3, :3],
+                normals,
+            )
+            self.gauss_params["normals"] = normals_world
 
-            xys = self.xys[0, ...].detach()
+
+
+            # xys = self.xys[0, ...].detach()
+            xys = self.xys[0, ...]
 
             normals_im: Tensor = rasterize_gaussians(  # type: ignore
                 xys,
@@ -582,10 +605,10 @@ class DNSplatterModel(SplatfactoModel):
                 self.camera_idx = camera.metadata["cam_idx"]  # type: ignore
         self.camera = camera
 
-        c2w = self.camera.camera_to_worlds.squeeze(0).detach()
-        c2w = c2w @ torch.diag(
-            torch.tensor([1, -1, -1, 1], device=c2w.device, dtype=c2w.dtype)
-        )
+        # c2w = self.camera.camera_to_worlds.squeeze(0).detach()
+        # c2w = c2w @ torch.diag(
+        #     torch.tensor([1, -1, -1, 1], device=c2w.device, dtype=c2w.dtype)
+        # )
         surface_normal = normal_from_depth_image(
             depths=depth_im.detach(),
             fx=self.camera.fx.item(),
@@ -597,12 +620,13 @@ class DNSplatterModel(SplatfactoModel):
             device=self.device,
             smooth=False,
         )
-        surface_normal = surface_normal @ torch.diag(
-            torch.tensor([1, -1, -1], device=depth_im.device, dtype=depth_im.dtype)
-        )
+        # surface_normal = surface_normal @ torch.diag(
+        #     torch.tensor([1, -1, -1], device=depth_im.device, dtype=depth_im.dtype)
+        # )
+        surface_normal = -surface_normal
         surface_normal = (1 + surface_normal) / 2
 
-        return {
+        outputs = {
             "rgb": rgb.squeeze(0),
             "depth": depth_im,
             "normal": normals_im,  # predicted normal from gaussians
@@ -610,6 +634,16 @@ class DNSplatterModel(SplatfactoModel):
             "accumulation": alpha.squeeze(0),
             "background": background,
         }
+
+        if False:
+            from pathlib import Path
+            from dn_splatter.utils.utils import plot_model_outputs
+
+            plot_model_outputs(
+                outputs, save_path=Path("output.png")
+            )
+
+        return outputs
 
     def get_loss_dict(
         self, outputs, batch, metrics_dict=None
@@ -709,6 +743,7 @@ class DNSplatterModel(SplatfactoModel):
                 pred_depth=depth_out,
                 gt_depth=depth_gt,
                 pred_normal=pred_normal,
+                surface_normal=surface_normal,
                 gt_normal=gt_normal,
                 **additional_data,
             )
@@ -723,6 +758,8 @@ class DNSplatterModel(SplatfactoModel):
                 pred_normal=(2 * pred_normal - 1).permute(2, 0, 1),
                 **additional_data,
             )
+        else:
+            raise ValueError("Regularization strategy not supported")
 
         main_loss = rgb_loss + regularization_strategy_loss
 
@@ -1292,9 +1329,7 @@ class DNSplatterModel(SplatfactoModel):
         )  # (n_points, 3)
         samples = (
             points[:, None, :] + points_range * camera_to_samples[:, None, :]
-        ).view(
-            -1, 3
-        )  # (n_points * n_points_in_range, 3)
+        ).view(-1, 3)  # (n_points * n_points_in_range, 3)
         samples_closest_gaussians_idx = (
             closest_gaussians_idx[:, None, :]
             .expand(-1, n_points_in_range, -1)
@@ -1621,5 +1656,8 @@ def invert_quaternion(quat: Tensor):
     Returns:
         inverse quat, shape (..., 4).
     """
+    scaling = torch.tensor([1, -1, -1, -1], device=quat.device)
+    return quat * scaling
+
     scaling = torch.tensor([1, -1, -1, -1], device=quat.device)
     return quat * scaling
