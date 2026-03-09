@@ -1,15 +1,15 @@
 #!/bin/bash
-ns-train dn-splatter --experiment-name basic/hyperparams_matches_original/enable_normal_l1_enable_disparity_w3e-1 \
+ns-train dn-splatter --experiment-name basic/hyperparams_matches_original/enable_normal_angular_enable_disparity_w1e-1 \
   --vis tensorboard \
   --pipeline.model.use-depth-loss False \
   --pipeline.model.depth-lambda 0.2 \
   --pipeline.model.use-normal-loss True \
   --pipeline.model.use-normal-tv-loss True \
   --pipeline.model.use-disparity-normal-loss True \
-  --pipeline.model.disparity-normal-loss-lambda 0.3 \
+  --pipeline.model.disparity-normal-loss-lambda 0.1 \
   --pipeline.model.normal-supervision mono \
-  --pipeline.model.normal-lambda 1.0 \
-  --pipeline.model.normal-loss-type L1 \
+  --pipeline.model.normal-lambda 0.01 \
+  --pipeline.model.normal-loss-type Angular \
    mushroom \
   --data /data/users/richard/dn-splatter-jizong/dn-splatter/datasets/room_datasets/coffee_room \
   --depth-mode disparity

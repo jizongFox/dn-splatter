@@ -134,7 +134,7 @@ class DNSplatterModelConfig(SplatfactoModelConfig):
     pearson_lambda: float = 0
     """Regularizer for pearson depth loss"""
     #
-    densify_grad_thresh: float =  0.0008
+    densify_grad_thresh: float =  0.0015
     # split_screen_size: float = 0.5
 
 
