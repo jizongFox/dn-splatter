@@ -494,6 +494,9 @@ class MushroomDataParser(DataParser):
                             )
                             generate_iPhone_pointcloud_within_sequence(long_data_dir)
 
+                        CONSOLE.log(
+                            f"[bold green] Successfully found polycam pointcloud at {iphone_ply_file_path}."
+                        )
                     else:
                         from nerfstudio.process_data.colmap_utils import (
                             create_ply_from_colmap,
@@ -662,6 +665,8 @@ class MushroomDataParser(DataParser):
                     else None
                 }
             )
+
+            CONSOLE.print(f"Successfully found {len(disparity_filenames)} disparity files.")
         else:
             raise ValueError(f"Unknown depth mode {self.config.depth_mode}")
 

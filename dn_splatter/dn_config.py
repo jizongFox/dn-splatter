@@ -100,7 +100,7 @@ ags_mesh = MethodSpecification(
                 "scheduler": None,
             },
             "features_rest": {
-                "optimizer": AdamOptimizerConfig(lr=0.0025 / 20, eps=1e-15),
+                "optimizer": AdamOptimizerConfig(lr=0.0 / 20, eps=1e-15),
                 "scheduler": None,
             },
             "opacities": {
