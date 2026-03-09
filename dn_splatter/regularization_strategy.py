@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -104,10 +104,10 @@ class RegularizationStrategy(nn.Module):
         return self.device_indicator_param.device
 
     @abstractmethod
-    def get_loss(self, **kwargs) -> dict[str, Tensor]:
+    def get_loss(self, **kwargs) -> Dict[str, Tensor]:
         """Loss"""
 
-    def forward(self, **kwargs) -> dict[str, Tensor]:
+    def forward(self, **kwargs) -> Dict[str, Tensor]:
         """"""
         return self.get_loss(**kwargs)
 
@@ -142,7 +142,7 @@ class DNRegularization(RegularizationStrategy):
 
     def get_loss(
         self, pred_depth, gt_depth, pred_normal, surface_normal, gt_normal, **kwargs
-    ) -> dict[str, Tensor]:
+    ) -> Dict[str, Tensor]:
         """Regularization loss"""
 
         depth_loss, pred_normal_loss, surface_normal_loss, smooth_loss = (
@@ -161,8 +161,10 @@ class DNRegularization(RegularizationStrategy):
             surface_normal_loss = self.get_normal_loss(
                 surface_normal, gt_normal, name="surf_norm", **kwargs
             )
-        smooth_loss = self.normal_smooth_loss(pred_normal) * self.smooth_lambda
-        smooth_loss += self.normal_smooth_loss(surface_normal) * self.smooth_lambda
+        if self.normal_smooth_loss is not None:
+            smooth_loss = self.normal_smooth_loss(pred_normal) * self.smooth_lambda
+            smooth_loss += self.normal_smooth_loss(surface_normal) * self.smooth_lambda
+            
         scales = kwargs["scales"]
         scale_loss = self.get_scale_loss(scales=scales)
         return {

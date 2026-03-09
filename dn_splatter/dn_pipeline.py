@@ -351,8 +351,8 @@ class DNSplatterPipeline(VanillaPipeline):
                     progress.advance(task)
 
             CONSOLE.print("[bold green]Computing point cloud metrics")
-            pd_output_path = f"/{output_path}/final_renders"
-            os.makedirs(os.getcwd() + f"{pd_output_path}", exist_ok=True)
+            pd_output_path = Path(output_path) / "final_renders"
+            pd_output_path.mkdir(parents=True, exist_ok=True)
             if self.datamanager.dataparser.__class__.__name__ == "MushroomDataParser":
                 # load reference pcd for pointcloud comparison
                 dataset_path = self.datamanager.dataparser_config.data
@@ -399,7 +399,7 @@ class DNSplatterPipeline(VanillaPipeline):
                 pcd = pcd.transform(initial_transformation)
                 if output_path is not None:
                     o3d.io.write_point_cloud(
-                        os.getcwd() + f"{pd_output_path}/pointcloud_within.ply", pcd
+                        str(pd_output_path / "pointcloud_within.ply"), pcd
                     )
 
                 acc, comp = self.pd_metrics(pcd, ref_pcd)
@@ -438,7 +438,7 @@ class DNSplatterPipeline(VanillaPipeline):
                 pcd = pcd.transform(initial_transformation)
                 if output_path is not None:
                     o3d.io.write_point_cloud(
-                        os.getcwd() + f"{pd_output_path}/pointcloud_with.ply", pcd
+                        str(pd_output_path / "pointcloud_with.ply"), pcd
                     )
 
                 acc, comp = self.pd_metrics(pcd, ref_pcd)
@@ -485,7 +485,7 @@ class DNSplatterPipeline(VanillaPipeline):
 
                 if output_path is not None:
                     o3d.io.write_point_cloud(
-                        os.getcwd() + f"{pd_output_path}/pointcloud.ply", pcd
+                        str(pd_output_path / "pointcloud.ply"), pcd
                     )
                 acc, comp = self.pd_metrics(pcd, ref_pcd)
                 pd_metrics = {
@@ -571,7 +571,7 @@ class DNSplatterPipeline(VanillaPipeline):
             # render gs model images
             CONSOLE.print("[bold green]Rendering output images")
             if self._model.__class__.__name__ in ["DNSplatterModel", "SplatfactoModel"]:
-                render_output_path = f"/{output_path}/final_renders"
+                render_output_path = str(Path(output_path) / "final_renders")
                 train_cache = self.datamanager.cached_train
                 eval_cache = self.datamanager.cached_eval
                 train_dataset = self.datamanager.train_dataset
@@ -595,7 +595,7 @@ class DNSplatterPipeline(VanillaPipeline):
             else:
                 # render other models
                 print("Rendering for ", self._model.__class__.__name__)
-                render_output_path = f"/{output_path}/final_renders"
+                render_output_path = str(Path(output_path) / "final_renders")
                 train_dataset = self.datamanager.train_dataset
                 eval_dataset = self.datamanager.eval_dataset
                 model = self._model

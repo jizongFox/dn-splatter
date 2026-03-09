@@ -496,10 +496,9 @@ def gs_get_point_clouds(
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
     pcd.colors = o3d.utility.Vector3dVector(colors)
-    CONSOLE.print(
-        f"[bold yellow]Saved pointcloud to {os.getcwd() + render_output_path}'/pointcloud.ply'"
-    )
-    o3d.io.write_point_cloud(os.getcwd() + f"{render_output_path}/pointcloud.ply", pcd)
+    pcd_path = str(Path(render_output_path) / "pointcloud.ply")
+    CONSOLE.print(f"[bold yellow]Saved pointcloud to {pcd_path}")
+    o3d.io.write_point_cloud(pcd_path, pcd)
     return (points, colors)
 
 
@@ -761,57 +760,55 @@ def save_outputs_helper(
     if rgb_out is not None and gt_img is not None:
         save_img(
             rgb_out,
-            os.getcwd() + f"/{render_output_path}/pred/rgb/{image_name}.png",
+            str(Path(render_output_path) / "pred" / "rgb" / f"{image_name}.png"),
             False,
         )
         save_img(
             gt_img,
-            os.getcwd() + f"/{render_output_path}/gt/rgb/{image_name}.png",
+            str(Path(render_output_path) / "gt" / "rgb" / f"{image_name}.png"),
             False,
         )
     if depth_color is not None:
         save_img(
             depth_color,
-            os.getcwd()
-            + f"/{render_output_path}/pred/depth/colorised/{image_name}.png",
+            str(Path(render_output_path) / "pred" / "depth" / "colorised" / f"{image_name}.png"),
             False,
         )
     if depth_gt_color is not None:
         save_img(
             depth_gt_color,
-            os.getcwd() + f"/{render_output_path}/gt/depth/colorised/{image_name}.png",
+            str(Path(render_output_path) / "gt" / "depth" / "colorised" / f"{image_name}.png"),
             False,
         )
     if depth_gt is not None:
         # save metric depths
         save_depth(
             depth_gt,
-            os.getcwd() + f"/{render_output_path}/gt/depth/raw/{image_name}.npy",
+            str(Path(render_output_path) / "gt" / "depth" / "raw" / f"{image_name}.npy"),
             False,
         )
     if depth is not None:
         save_depth(
             depth,
-            os.getcwd() + f"/{render_output_path}/pred/depth/raw/{image_name}.npy",
+            str(Path(render_output_path) / "pred" / "depth" / "raw" / f"{image_name}.npy"),
             False,
         )
 
     if normal is not None:
         save_normal(
             normal,
-            os.getcwd() + f"/{render_output_path}/pred/normal/{image_name}.png",
+            str(Path(render_output_path) / "pred" / "normal" / f"{image_name}.png"),
             verbose=False,
         )
 
     if normal_gt is not None:
         save_normal(
             normal_gt,
-            os.getcwd() + f"/{render_output_path}/gt/normal/{image_name}.png",
+            str(Path(render_output_path) / "gt" / "normal" / f"{image_name}.png"),
             verbose=False,
         )
 
 
-@torch.compile(mode="reduce-overhead")
 def _gaussian_frame_normals_from_tensors(
     quats: Float[Tensor, "n 4"],
     scaling: Float[Tensor, "n 3"],

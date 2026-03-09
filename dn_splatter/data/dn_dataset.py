@@ -49,7 +49,7 @@ class GDataset(InputDataset):
 
         if "depth_mode" in self.metadata:
             self.depth_mode = self.metadata["depth_mode"]
-            assert self.depth_mode in ["sensor", "mono", "all", "none"]
+            assert self.depth_mode in ["sensor", "mono", "all", "none", "disparity"]
         else:
             self.depth_mode = "sensor"
 
@@ -96,6 +96,19 @@ class GDataset(InputDataset):
                 else:
                     CONSOLE.print(
                         "[bold yellow] Could not find mono depth filenames in dataparser. Quitting!"
+                    )
+                    quit()
+
+            self.disparity_filenames = None
+            if self.depth_mode == "disparity":
+                if (
+                    "disparity_filenames" in dataparser_outputs.metadata.keys()
+                    and dataparser_outputs.metadata["disparity_filenames"] is not None
+                ):
+                    self.disparity_filenames = self.metadata["disparity_filenames"]
+                else:
+                    CONSOLE.print(
+                        "[bold yellow] Could not find disparity filenames in dataparser. Quitting!"
                     )
                     quit()
         # load normals
@@ -163,6 +176,13 @@ class GDataset(InputDataset):
                     scale_factor=scale_factor,
                 )
                 depth_data.update({"mono_depth": mono_image})
+
+            if self.depth_mode == "disparity":
+                assert self.disparity_filenames is not None
+                filepath = self.disparity_filenames[data["image_idx"]]
+                disparity_np = np.load(filepath)
+                disparity_tensor = torch.from_numpy(disparity_np).float().unsqueeze(-1)  # [H, W, 1]
+                depth_data.update({"disparity": disparity_tensor})
 
         if self.load_normals:
             assert self.normal_filenames is not None

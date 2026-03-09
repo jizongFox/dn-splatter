@@ -521,17 +521,17 @@ class MushroomDataParser(DataParser):
                     )
                     if metadata["points3D_xyz"].shape[0] != self.config.num_init_points:
                         CONSOLE.log(
-                            f"[bold yellow] Found pointcloud with {metadata['points3D_xyz'].shape[0]} number of points, regenerating with with {self.config.num_init_points} points..."
+                            f"[bold yellow] Found pointcloud with {metadata['points3D_xyz'].shape[0]} number of points, keeping it as is..."
                         )
-                        generate_iPhone_pointcloud_within_sequence(
-                            long_data_dir, num_points=self.config.num_init_points
-                        )
+                        # generate_iPhone_pointcloud_within_sequence(
+                        #     long_data_dir, num_points=self.config.num_init_points
+                        # )
 
-                        metadata.update(
-                            self._load_3D_points(
-                                iphone_ply_file_path, transform_matrix, scale_factor
-                            )
-                        )
+                        # metadata.update(
+                        #     self._load_3D_points(
+                        #         iphone_ply_file_path, transform_matrix, scale_factor
+                        #     )
+                        # )
 
                 else:
                     kinect_pointcloud_path = long_data_dir / self.config.kinect_ply_path
@@ -641,8 +641,20 @@ class MushroomDataParser(DataParser):
                 }
             )
         elif self.config.depth_mode == "disparity":
-            disparity_folder = self.depth_save_dir = long_data_dir / Path("disparity")
-            disparity_filenames = list(disparity_folder.glob("*.npy"))
+            # Build disparity filenames matched to image filenames by stem
+            long_disparity_folder = long_data_dir / Path("disparity")
+            short_disparity_folder = short_data_dir / Path("disparity")
+            long_disparity_filenames = [
+                long_disparity_folder / (f.stem + ".npy") for f in long_filenames
+            ]
+            short_disparity_filenames = [
+                short_disparity_folder / (f.stem + ".npy") for f in short_filenames
+            ]
+            all_disparity_filenames = long_disparity_filenames + short_disparity_filenames
+            disparity_filenames = [
+                all_disparity_filenames[i] for i in indices
+                if all_disparity_filenames[i].exists()
+            ]
             metadata.update(
                 {
                     "disparity_filenames": disparity_filenames
@@ -727,6 +739,12 @@ class MushroomDataParser(DataParser):
                 for filename in short_normal_filenames
                 if Path(filename).stem in [n.stem for n in short_filenames]
             ]
+            print(len(long_normal_filenames))
+            print(len(long_filenames))
+
+            print("normal_save_dir:", self.long_normal_save_dir)                                                                                                                                                                                                         
+            print("glob result:", len(self.get_normal_filepaths())) 
+               
             assert len(long_normal_filenames) == len(long_filenames)
             assert len(short_normal_filenames) == len(short_filenames)
             normal_filenames = long_normal_filenames + short_normal_filenames

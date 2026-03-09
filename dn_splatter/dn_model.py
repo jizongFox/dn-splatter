@@ -30,6 +30,8 @@ from dn_splatter.utils.utils import (
     _align_normals_orientation,
 )
 
+from dn_splatter.disparity_normal_loss import disparity_normal_loss
+
 try:
     from gsplat.rendering import rasterization
 except ImportError:
@@ -103,6 +105,10 @@ class DNSplatterModelConfig(SplatfactoModelConfig):
     """Threshold for clipping opacities"""
     two_d_gaussians: bool = True
     """Encourage 2D Gaussians"""
+    use_disparity_normal_loss: bool = False
+    """Enable disparity-normal consistency loss"""
+    disparity_normal_loss_lambda: float = 0.1
+    """Weight for disparity-normal consistency loss"""
 
     ### Splatfacto configs ###
     warmup_length: int = 500
@@ -128,7 +134,7 @@ class DNSplatterModelConfig(SplatfactoModelConfig):
     pearson_lambda: float = 0
     """Regularizer for pearson depth loss"""
     #
-    densify_grad_thresh: float =  0.005
+    densify_grad_thresh: float =  0.0008
     # split_screen_size: float = 0.5
 
 
@@ -277,6 +283,9 @@ class DNSplatterModel(SplatfactoModel):
 
         if not self.config.use_normal_loss:
             self.regularization_strategy.normal_loss = None
+        
+        if not self.config.use_normal_tv_loss:
+            self.regularization_strategy.normal_smooth_loss = None
 
     @property
     def normals(self):
@@ -762,10 +771,23 @@ class DNSplatterModel(SplatfactoModel):
 
         main_loss = rgb_loss
 
+        dn_loss_dict = {}
+        if self.config.use_disparity_normal_loss and "disparity" in batch:
+            # depth_out is [H, W, 1], disparity is [H, W, 1], loss expects [1, H, W]
+            render_depth = depth_out.permute(2, 0, 1)
+            gt_disparity = batch["disparity"].to(self.device).permute(2, 0, 1)
+            dn_loss = disparity_normal_loss(
+                render_depth=render_depth,
+                gt_disparity=gt_disparity,
+                weight=self.config.disparity_normal_loss_lambda,
+            )
+            dn_loss_dict["disparity_normal_loss"] = dn_loss
+
         return {
             "main_loss": main_loss,
             "scale_reg": scale_reg,
             **regularization_strategy_loss,
+            **dn_loss_dict,
         }
 
     def get_metrics_dict(self, outputs, batch) -> Dict[str, torch.Tensor]:
