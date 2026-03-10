@@ -48,7 +48,7 @@ def _create_grid(width, height, device, dtype=torch.float):
 
 
 def _compute_dd_duv(normal, depth, focal_x, focal_y, cx, cy):
-    """Compute depth gradients du/dv from surface normals and camera intrinsics."""
+    """Compute depth gradients du/dv from normals and camera intrinsics."""
     grid = _create_grid(
         width=depth.shape[2],
         height=depth.shape[1],
@@ -76,6 +76,7 @@ def disparity_normal_loss(
     gt_disparity: torch.Tensor,
     weight: float = 0.1,
     render_normals: torch.Tensor = None,
+    surface_normals: torch.Tensor = None,
     focal_x: float = None,
     focal_y: float = None,
     cx: float = None,
@@ -117,33 +118,62 @@ def disparity_normal_loss(
         ) 
     )
 
-    # # Render normals branch
-    # if render_normals is not None and focal_x is not None:
-    #     d_render_dudv_from_normal = _compute_dd_duv(
-    #         normal=render_normals,
-    #         depth=render_depth,
-    #         focal_x=focal_x,
-    #         focal_y=focal_y,
-    #         cx=cx,
-    #         cy=cy,
-    #     )
-    #     d_render_dudv_from_normal = torch.nan_to_num(
-    #         d_render_dudv_from_normal, nan=1e-6
-    #     )
+    # Render normals branch
+    if render_normals is not None:
+        d_render_dudv_from_normal = _compute_dd_duv(
+            normal=render_normals,
+            depth=render_depth,
+            focal_x=focal_x,
+            focal_y=focal_y,
+            cx=cx,
+            cy=cy,
+        )
+        d_render_dudv_from_normal = torch.nan_to_num(
+            d_render_dudv_from_normal, nan=1e-6
+        )
 
-    #     d_gt_dudv_pred2 = -coefficients * gt_safe.squeeze(0) ** 2 * d_render_dudv_from_normal
+        d_gt_dudv_pred2 = -coefficients * gt_safe.squeeze(0) ** 2 * d_render_dudv_from_normal
 
-    #     d_gt_dudv_pred2_norm = torch.sqrt(
-    #         d_gt_dudv_pred2.pow(2).sum(dim=0) + 1e-8
-    #     )
+        d_gt_dudv_pred2_norm = torch.sqrt(
+            d_gt_dudv_pred2.pow(2).sum(dim=0) + 1e-8
+        )
 
-    #     loss = (
-    #         loss
-    #         + ((d_gt_dudv_pred2_norm - d_gt_dudv_norm).pow(2).mean())
-    #         + _cosine_dudv_loss(
-    #             tensor1=d_gt_dudv_pred2,
-    #             tensor2=d_gt_dudv,
-    #         )
-    #     )
+        loss = (
+            loss
+            + ((d_gt_dudv_pred2_norm - d_gt_dudv_norm).pow(2).mean())
+            + _cosine_dudv_loss(
+                tensor1=d_gt_dudv_pred2,
+                tensor2=d_gt_dudv,
+            )
+        )
+
+    # Surface normals branch
+    if surface_normals is not None:
+        d_surface_dudv_from_normal = _compute_dd_duv(
+            normal=surface_normals,
+            depth=render_depth,
+            focal_x=focal_x,
+            focal_y=focal_y,
+            cx=cx,
+            cy=cy,
+        )
+        d_surface_dudv_from_normal = torch.nan_to_num(
+            d_surface_dudv_from_normal, nan=1e-6
+        )
+
+        d_gt_dudv_pred3 = -coefficients * gt_safe.squeeze(0) ** 2 * d_surface_dudv_from_normal
+
+        d_gt_dudv_pred3_norm = torch.sqrt(
+            d_gt_dudv_pred3.pow(2).sum(dim=0) + 1e-8
+        )
+
+        loss = (
+            loss
+            + ((d_gt_dudv_pred3_norm - d_gt_dudv_norm).pow(2).mean())
+            + _cosine_dudv_loss(
+                tensor1=d_gt_dudv_pred3,
+                tensor2=d_gt_dudv,
+            )
+        )
 
     return loss * weight

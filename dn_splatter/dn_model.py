@@ -780,10 +780,19 @@ class DNSplatterModel(SplatfactoModel):
             # depth_out is [H, W, 1], disparity is [H, W, 1], loss expects [1, H, W]
             render_depth = depth_out.permute(2, 0, 1)
             gt_disparity = batch["disparity"].to(self.device).permute(2, 0, 1)
+            # Convert normals from [0, 1] [H, W, 3] to [-1, 1] [3, H, W]
+            render_normals= (2 * pred_normal - 1).permute(2, 0, 1)
+            surface_normals = (2 * surface_normal - 1).permute(2, 0, 1)
             dn_loss = disparity_normal_loss(
                 render_depth=render_depth,
                 gt_disparity=gt_disparity,
                 weight=self.config.disparity_normal_loss_lambda,
+                render_normals=render_normals,
+                surface_normals=surface_normals,
+                focal_x=self.camera.fx.item(),
+                focal_y=self.camera.fy.item(),
+                cx=self.camera.cx.item(),
+                cy=self.camera.cy.item(),
             )
             dn_loss_dict["disparity_normal_loss"] = dn_loss
 
