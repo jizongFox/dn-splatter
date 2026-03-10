@@ -109,6 +109,10 @@ class DNSplatterModelConfig(SplatfactoModelConfig):
     """Enable disparity-normal consistency loss"""
     disparity_normal_loss_lambda: float = 0.1
     """Weight for disparity-normal consistency loss"""
+    use_opacity_shrink: bool = False
+    """Enable opacity shrink regularization to reduce floaters"""
+    opacity_shrink_lambda: float = 0.01
+    """Weight for opacity shrink loss"""
 
     ### Splatfacto configs ###
     warmup_length: int = 500
@@ -782,6 +786,10 @@ class DNSplatterModel(SplatfactoModel):
                 weight=self.config.disparity_normal_loss_lambda,
             )
             dn_loss_dict["disparity_normal_loss"] = dn_loss
+
+        if self.config.use_opacity_shrink:
+            visible_opacities = self.opacities[self.vis_indices]  
+            dn_loss_dict["opacity_shrink"] = self.config.opacity_shrink_lambda * visible_opacities.mean()
 
         return {
             "main_loss": main_loss,
