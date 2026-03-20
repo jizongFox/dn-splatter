@@ -1,5 +1,5 @@
 #!/bin/bash
-ns-train dn-splatter --experiment-name basic/coffee_room/iphone_pcd/disparity_normals_on/enable_disparity_w1e-1_enable_preact_w1e-4 \
+ns-train dn-splatter --experiment-name basic/coffee_room/iphone_pcd/new/kernel_700_eps_0.05/alpha_and_beta_depth_space/depth_space_L1 \
     --vis tensorboard \
     --pipeline.model.use-depth-loss False \
     --pipeline.model.depth-lambda 0.2 \
@@ -7,10 +7,13 @@ ns-train dn-splatter --experiment-name basic/coffee_room/iphone_pcd/disparity_no
     --pipeline.model.use-normal-tv-loss False \
     --pipeline.model.use-disparity-normal-loss True \
     --pipeline.model.disparity-normal-loss-lambda 0.1 \
+    --pipeline.model.l1-weight 0.4 \
+    --pipeline.model.guided-blur-radius 700 \
+    --pipeline.model.guided-blur-eps 0.05 \
     --pipeline.model.normal-supervision mono \
     --pipeline.model.normal-lambda 0.01 \
     --pipeline.model.normal-loss-type Angular \
-    --pipeline.model.use_opacity_shrink True \
+    --pipeline.model.use_opacity_shrink False \
     --pipeline.model.opacity_shrink_lambda 1e-4 \
     mushroom \
     --data /data/users/richard/dn-splatter-jizong/dn-splatter/datasets/room_datasets/coffee_room \
