@@ -109,6 +109,12 @@ class DNSplatterModelConfig(SplatfactoModelConfig):
     """Enable disparity-normal consistency loss"""
     disparity_normal_loss_lambda: float = 0.1
     """Weight for disparity-normal consistency loss"""
+    l1_weight: float = 0.4
+    """Weight for affine-invariant disparity L1 loss (independent from disparity_normal_loss_lambda)"""
+    guided_blur_radius: int = 800
+    """Radius for guided blur filter in disparity-normal loss"""
+    guided_blur_eps: float = 1.0
+    """Eps for guided blur filter in disparity-normal loss"""
     use_opacity_shrink: bool = False
     """Enable opacity shrink regularization to reduce floaters"""
     opacity_shrink_lambda: float = 0.01
@@ -137,7 +143,7 @@ class DNSplatterModelConfig(SplatfactoModelConfig):
     # pearson depth loss lambda
     pearson_lambda: float = 0
     """Regularizer for pearson depth loss"""
-    #
+
     densify_grad_thresh: float =  0.0008
     # split_screen_size: float = 0.5
 
@@ -617,6 +623,8 @@ class DNSplatterModel(SplatfactoModel):
         if hasattr(camera, "metadata"):
             if camera.metadata is not None and "cam_idx" in camera.metadata:
                 self.camera_idx = camera.metadata["cam_idx"]  # type: ignore
+            if camera.metadata is not None and "image_filename" in camera.metadata:
+                self.image_filename = camera.metadata["image_filename"]  # type: ignore
         self.camera = camera
 
         # c2w = self.camera.camera_to_worlds.squeeze(0).detach()
@@ -667,6 +675,10 @@ class DNSplatterModel(SplatfactoModel):
             batch: ground truth batch corresponding to outputs
             metrics_dict: dictionary of metrics, some of which we can use for loss
         """
+        if self.training:
+            filename = getattr(self, "image_filename", "unknown")
+            # print(f"[Train] Step {self.step}, Frame {self.camera_idx}, File: {filename}")
+
         loss_dict = super().get_loss_dict(
             outputs=outputs, batch=batch, metrics_dict=metrics_dict
         )
@@ -738,6 +750,16 @@ class DNSplatterModel(SplatfactoModel):
             "gt_img": gt_img,
         }
 
+        # Align mono depth to rendered depth during training(this is for dn_splatter baseline comparison)
+        if mono_depth_gt is not None:
+            with torch.no_grad():
+                _fx = mono_depth_gt.reshape(-1)
+                _fy = depth_out.detach().reshape(-1)
+                _fA = torch.stack([_fx, torch.ones_like(_fx)], dim=1)
+                _sol = torch.linalg.solve(_fA.T @ _fA, _fA.T @ _fy)
+                alpha, beta = _sol[0], _sol[1]
+                mono_depth_gt = alpha * mono_depth_gt + beta
+
         depth_gt = None
         if sensor_depth_gt is not None:
             depth_gt = sensor_depth_gt
@@ -777,24 +799,31 @@ class DNSplatterModel(SplatfactoModel):
 
         dn_loss_dict = {}
         if self.config.use_disparity_normal_loss and "disparity" in batch:
+
             # depth_out is [H, W, 1], disparity is [H, W, 1], loss expects [1, H, W]
             render_depth = depth_out.permute(2, 0, 1)
             gt_disparity = batch["disparity"].to(self.device).permute(2, 0, 1)
+            
             # Convert normals from [0, 1] [H, W, 3] to [-1, 1] [3, H, W]
             render_normals= (2 * pred_normal - 1).permute(2, 0, 1)
             surface_normals = (2 * surface_normal - 1).permute(2, 0, 1)
-            dn_loss = disparity_normal_loss(
+
+            dn_loss, l1_loss = disparity_normal_loss(
                 render_depth=render_depth,
                 gt_disparity=gt_disparity,
                 weight=self.config.disparity_normal_loss_lambda,
-                render_normals=render_normals,
-                surface_normals=surface_normals,
+                l1_weight=self.config.l1_weight,
+                render_normals=None,
+                surface_normals=None,
                 focal_x=self.camera.fx.item(),
                 focal_y=self.camera.fy.item(),
                 cx=self.camera.cx.item(),
                 cy=self.camera.cy.item(),
+                guided_blur_radius=self.config.guided_blur_radius,
+                guided_blur_eps=self.config.guided_blur_eps,
             )
             dn_loss_dict["disparity_normal_loss"] = dn_loss
+            dn_loss_dict["l1_loss"] = l1_loss
 
         if self.config.use_opacity_shrink:
             visible_opacities = self.opacities[self.vis_indices]  

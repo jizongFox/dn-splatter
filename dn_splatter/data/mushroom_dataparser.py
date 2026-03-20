@@ -592,7 +592,7 @@ class MushroomDataParser(DataParser):
                     path_to_transforms=None,
                     save_path=self.depth_save_dir,
                     create_new_transforms=False,
-                    return_mode="mono-aligned",
+                    return_mode="mono",
                 )
             long_name_list = [frame.name for frame in long_depth_filenames]
             long_mono_depth_filenames = self.get_depth_filepaths()
@@ -613,7 +613,7 @@ class MushroomDataParser(DataParser):
                     path_to_transforms=None,
                     save_path=self.depth_save_dir,
                     create_new_transforms=False,
-                    return_mode="mono-aligned",
+                    return_mode="mono",
                 )
             short_name_list = [frame.name for frame in short_depth_filenames]
             short_mono_depth_filenames = self.get_depth_filepaths()

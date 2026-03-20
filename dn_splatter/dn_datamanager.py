@@ -147,6 +147,7 @@ class DNSplatterDataManager(FullImageDatamanager):
         if camera.metadata is None:
             camera.metadata = {}
         camera.metadata["cam_idx"] = self.image_idx
+        camera.metadata["image_filename"] = str(self.train_dataset.image_filenames[self.image_idx])
         return camera, data
 
     def next_eval(self, step: int) -> Tuple[Cameras, Dict]:
