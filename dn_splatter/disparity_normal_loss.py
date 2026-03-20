@@ -99,9 +99,9 @@ def disparity_normal_loss(
 
     coefficients = d_gt_norm / (gt_safe.squeeze(0) ** 2 * d_render_norm + 1e-5)
 
-    # Clamp 5% of outliers (bottom 2.5% and top 2.5%) 
-    lower = torch.quantile(coefficients.float(), 0.025)
-    upper = torch.quantile(coefficients.float(), 0.975)
+    # Clamp 10% of outliers (bottom 5% and top 5%) 
+    lower = torch.quantile(coefficients.float(), 0.05)
+    upper = torch.quantile(coefficients.float(), 0.95)
     coefficients = coefficients.clamp(min=lower, max=upper)
 
     beta = 1.0 / gt_safe.squeeze(0) - coefficients * render_depth.squeeze(0)
@@ -121,13 +121,13 @@ def disparity_normal_loss(
     d_gt_dudv_pred_norm = torch.sqrt(d_gt_dudv_pred.pow(2).sum(dim=0) + 1e-8)
     d_gt_dudv_norm = torch.sqrt(d_gt_dudv.pow(2).sum(dim=0) + 1e-8)
 
-    # Clamp 5% of outliers (bottom 2.5% and top 2.5%) 
-    lower = torch.quantile(d_gt_dudv_pred_norm.float(), 0.025)
-    upper = torch.quantile(d_gt_dudv_pred_norm.float(), 0.975)
+    # Clamp 10% of outliers (bottom 5% and top 5%) 
+    lower = torch.quantile(d_gt_dudv_pred_norm.float(), 0.05)
+    upper = torch.quantile(d_gt_dudv_pred_norm.float(), 0.95)
     d_gt_dudv_pred_norm = d_gt_dudv_pred_norm.clamp(min=lower, max=upper)
 
-    lower = torch.quantile(d_gt_dudv_norm.float(), 0.025)
-    upper = torch.quantile(d_gt_dudv_norm.float(), 0.975)
+    lower = torch.quantile(d_gt_dudv_norm.float(), 0.05)
+    upper = torch.quantile(d_gt_dudv_norm.float(), 0.95)
     d_gt_dudv_norm = d_gt_dudv_norm.clamp(min=lower, max=upper)
 
     render_depth_reconstructed = (1 - beta * gt_safe.squeeze(0)) / (coefficients * gt_safe.squeeze(0))
