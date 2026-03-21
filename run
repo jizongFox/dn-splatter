@@ -1,41 +1,44 @@
 #!/bin/bash
-ns-train dn-splatter --experiment-name basic/coffee_room/iphone_pcd/new/kernel_700_eps_0.05/alpha_and_beta_depth_space/depth_space_L1 \
-    --vis tensorboard \
-    --pipeline.model.use-depth-loss False \
-    --pipeline.model.depth-lambda 0.2 \
-    --pipeline.model.use-normal-loss False \
-    --pipeline.model.use-normal-tv-loss False \
-    --pipeline.model.use-disparity-normal-loss True \
-    --pipeline.model.disparity-normal-loss-lambda 0.1 \
-    --pipeline.model.l1-weight 0.4 \
-    --pipeline.model.guided-blur-radius 700 \
-    --pipeline.model.guided-blur-eps 0.05 \
-    --pipeline.model.normal-supervision mono \
-    --pipeline.model.normal-lambda 0.01 \
-    --pipeline.model.normal-loss-type Angular \
-    --pipeline.model.use_opacity_shrink False \
-    --pipeline.model.opacity_shrink_lambda 1e-4 \
-    mushroom \
-    --data /data/users/richard/dn-splatter-jizong/dn-splatter/datasets/room_datasets/coffee_room \
-    --depth-mode disparity
 
-#ns-train dn-splatter --experiment-name basic/enable_normal \
-#  --vis tensorboard \
-#  --pipeline.model.use-depth-loss False \
-#  --pipeline.model.depth-lambda 0.2 \
-#  --pipeline.model.use-normal-loss True \
-#  --pipeline.model.use-normal-tv-loss True \
-#  --pipeline.model.normal-supervision mono \
-#   mushroom \
-#  --data /home/jizong/workspace/dConstruct/dn-splatter/datasets/room_datasets/coffee_room
-#
-#
-#ns-train dn-splatter --experiment-name basic/baseline \
-#  --vis tensorboard \
-#  --pipeline.model.use-depth-loss False \
-#  --pipeline.model.depth-lambda 0.2 \
-#  --pipeline.model.use-normal-loss False \
-#  --pipeline.model.use-normal-tv-loss True \
-#  --pipeline.model.normal-supervision mono \
-#   mushroom \
-#  --data /home/jizong/workspace/dConstruct/dn-splatter/datasets/room_datasets/coffee_room
+ROOT_PATH=/data/users/richard/dn-splatter-jizong/dn-splatter/outputs
+EXPERIMENT_PATH=basic/coffee_room/iphone_pcd/new/hyperparameter_sweep/alpha_and_beta_depth_space/depth_space_L1/coefficient_clamp_10percent
+
+for radius in 150 200 300 400 500 600; do
+    for eps in 1 0.3 0.1; do
+
+        RUN_NAME=kernel_${radius}_eps_${eps}
+
+        ns-train dn-splatter --experiment-name ${EXPERIMENT_PATH} \
+            --vis tensorboard \
+            --timestamp ${RUN_NAME} \
+            --pipeline.model.use-depth-loss False \
+            --pipeline.model.depth-lambda 0.2 \
+            --pipeline.model.use-normal-loss False \
+            --pipeline.model.use-normal-tv-loss False \
+            --pipeline.model.use-disparity-normal-loss True \
+            --pipeline.model.disparity-normal-loss-lambda 0.1 \
+            --pipeline.model.l1-weight 0.4 \
+            --pipeline.model.guided-blur-radius ${radius} \
+            --pipeline.model.guided-blur-eps ${eps} \
+            --pipeline.model.normal-supervision mono \
+            --pipeline.model.normal-lambda 0.01 \
+            --pipeline.model.normal-loss-type Angular \
+            --pipeline.model.use_opacity_shrink False \
+            --pipeline.model.opacity_shrink_lambda 1e-4 \
+            mushroom \
+            --data /data/users/richard/dn-splatter-jizong/dn-splatter/datasets/room_datasets/coffee_room \
+            --depth-mode disparity
+
+        OUTPUT_PATH=${ROOT_PATH}/${EXPERIMENT_PATH}/dn-splatter/${RUN_NAME}
+
+        ns-eval --load-config ${OUTPUT_PATH}/config.yml --output-path ${OUTPUT_PATH}/output.json
+
+        ns-eval --load-config ${OUTPUT_PATH}/config.yml --output-path ${OUTPUT_PATH}/output.json --render-output-path ${OUTPUT_PATH}/renders
+
+        gs-mesh o3dtsdf --load-config ${OUTPUT_PATH}/config.yml --output-dir ${OUTPUT_PATH}/mesh_o3
+
+        python dn_splatter/eval/eval_mesh_mushroom_vis_cull.py --gt_mesh_path /data/users/richard/dn-splatter/datasets/room_datasets/coffee_room --pred_mesh_path ${OUTPUT_PATH}/mesh_o3/Open3dTSDFfusion_mesh.ply --device iphone
+
+    done
+done
+
